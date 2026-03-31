@@ -1,0 +1,13 @@
+ [package]
+ name = "ssh-broker-proto"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
+ publish = false
+ 
+ [dependencies]
+ prost.workspace = true
+ tonic.workspace = true
+ 
+ [build-dependencies]
+ tonic-build = "0.12"

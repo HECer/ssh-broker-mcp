@@ -1,0 +1,192 @@
+ syntax = "proto3";
+ 
+ package sshbroker.v1;
+ 
+ // Design rules:
+ // - No RPC may return secret material (passwords, private keys, TOTP seeds, etc.).
+ // - Credentials are referenced by opaque IDs only.
+ 
+ service CredentialService {
+   // Lists non-sensitive credential metadata. Safe to expose to an untrusted caller.
+   rpc ListCredentials(ListCredentialsRequest) returns (ListCredentialsResponse);
+ 
+   // Deletes a credential (metadata + secret material) by ID.
+   rpc DeleteCredential(DeleteCredentialRequest) returns (DeleteCredentialResponse);
+ }
+ 
+ service SessionService {
+   // Opens a logical SSH session (typically a ControlMaster socket).
+   rpc OpenSession(OpenSessionRequest) returns (OpenSessionResponse);
+ 
+   // Executes a command via an existing session.
+   rpc Exec(ExecRequest) returns (ExecResponse);
+ 
+  // Interactive shell over SSH (bidi streaming of bytes).
+  rpc Shell(stream ShellClientMsg) returns (stream ShellServerMsg);
+
+  // Uploads a file to the remote host using SCP.
+  rpc ScpUpload(stream ScpUploadRequest) returns (ScpUploadResponse);
+
+  // Downloads a file from the remote host using SCP.
+  rpc ScpDownload(ScpDownloadRequest) returns (stream ScpDownloadResponse);
+
+  // Starts a port forward associated with a session.
+  rpc StartForward(StartForwardRequest) returns (StartForwardResponse);
+
+  // Stops a previously started port forward.
+  rpc StopForward(StopForwardRequest) returns (StopForwardResponse);
+
+   // Closes and cleans up a session.
+   rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
+ }
+ 
+ message CredentialMeta {
+   string credential_id = 1; // opaque
+   string label = 2;
+   string username = 3;
+   string auth_type = 4; // e.g. "ssh_key", "password_totp", "ssh_cert"
+ 
+   // Target selection / allowlisting.
+   repeated string allowed_hosts = 10; // exact hostnames or patterns (implementation-defined)
+
+  // Optional username allowlist. If empty, only `username` is allowed.
+  repeated string allowed_usernames = 11;
+ }
+ 
+ message ListCredentialsRequest {}
+ message ListCredentialsResponse {
+   repeated CredentialMeta credentials = 1;
+ }
+ 
+ message DeleteCredentialRequest {
+   string credential_id = 1;
+ }
+ message DeleteCredentialResponse {}
+ 
+ message OpenSessionRequest {
+   string credential_id = 1;
+   string host = 2;
+   uint32 port = 3; // 22 if 0
+ 
+   // If set, overrides stored username for this session. Broker may reject by policy.
+   string username_override = 4;
+ }
+ message OpenSessionResponse {
+   string session_id = 1; // opaque
+ }
+ 
+ message ExecRequest {
+   string session_id = 1;
+   string command = 2;
+   uint32 timeout_ms = 3; // 0 means default
+ }
+ message ExecResponse {
+   int32 exit_code = 1;
+   bytes stdout = 2;
+   bytes stderr = 3;
+ }
+ 
+ // ---- Interactive shell ----
+ message ShellClientMsg {
+   oneof msg {
+     ShellOpen open = 1;
+     ShellInput input = 2;
+     ShellResize resize = 3;
+     ShellClose close = 4;
+   }
+ }
+ 
+ message ShellServerMsg {
+   oneof msg {
+     ShellOpened opened = 1;
+     ShellOutput output = 2;
+     ShellExit exit = 3;
+   }
+ }
+ 
+ message ShellOpen {
+   string session_id = 1;
+   // Request a remote TTY (recommended for interactive shells).
+   bool request_tty = 2;
+ }
+ message ShellOpened {}
+ 
+ message ShellInput {
+   bytes data = 1;
+ }
+ message ShellResize {
+   uint32 cols = 1;
+   uint32 rows = 2;
+ }
+ message ShellClose {}
+ 
+ message ShellOutput {
+   bytes stdout = 1;
+   bytes stderr = 2;
+ }
+ message ShellExit {
+   int32 exit_code = 1;
+ }
+ 
+ // ---- SCP ----
+ message ScpUploadRequest {
+   oneof msg {
+     ScpUploadOpen open = 1;
+     ScpUploadChunk chunk = 2;
+   }
+ }
+ message ScpUploadOpen {
+   string session_id = 1;
+   string remote_path = 2;
+   // If true, overwrite remote file if it exists.
+   bool overwrite = 3;
+ }
+ message ScpUploadChunk {
+   bytes data = 1;
+ }
+ message ScpUploadResponse {
+   uint64 bytes_written = 1;
+ }
+ 
+ message ScpDownloadRequest {
+   string session_id = 1;
+   string remote_path = 2;
+ }
+ message ScpDownloadResponse {
+   bytes data = 1;
+ }
+ 
+ // ---- Port forwarding ----
+ enum ForwardType {
+   FORWARD_TYPE_UNSPECIFIED = 0;
+   FORWARD_TYPE_LOCAL = 1;   // -L
+   FORWARD_TYPE_REMOTE = 2;  // -R
+   FORWARD_TYPE_DYNAMIC = 3; // -D
+ }
+ 
+ message StartForwardRequest {
+   string session_id = 1;
+   ForwardType forward_type = 2;
+ 
+   // For LOCAL: bind_addr:bind_port -> remote_host:remote_port
+   // For REMOTE: remote bind (remote side) bind_addr:bind_port -> local_host:local_port
+   // For DYNAMIC: bind_addr:bind_port (SOCKS)
+   string bind_addr = 3;
+   uint32 bind_port = 4;
+ 
+   string target_host = 5;
+   uint32 target_port = 6;
+ }
+ message StartForwardResponse {
+   string forward_id = 1;
+ }
+ message StopForwardRequest {
+   string session_id = 1;
+   string forward_id = 2;
+ }
+ message StopForwardResponse {}
+
+ message CloseSessionRequest {
+   string session_id = 1;
+ }
+ message CloseSessionResponse {}
