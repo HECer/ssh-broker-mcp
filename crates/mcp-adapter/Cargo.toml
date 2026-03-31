@@ -1,0 +1,20 @@
+ [package]
+ name = "ssh-broker-mcp"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
+ publish = false
+ 
+ [dependencies]
+ anyhow.workspace = true
+ clap.workspace = true
+ futures-util.workspace = true
+ serde.workspace = true
+ serde_json.workspace = true
+base64.workspace = true
+ tokio.workspace = true
+ tonic.workspace = true
+ tracing.workspace = true
+ tracing-subscriber.workspace = true
+ 
+ ssh-broker-proto = { path = "../proto" }
