@@ -1,88 +1,85 @@
- use anyhow::{anyhow, Context, Result};
- use std::path::{Path, PathBuf};
- use tokio::process::Command;
+use anyhow::{anyhow, Context, Result};
+use std::path::{Path, PathBuf};
+use tokio::process::Command;
 use tokio::process::Child;
- 
- #[derive(Debug, Clone)]
- pub struct ControlMaster {
-     pub user: String,
-     pub host: String,
-     pub port: u16,
-     pub control_path: PathBuf,
+
+#[derive(Debug, Clone)]
+pub struct ControlMaster {
+    pub user: String,
+    pub host: String,
+    pub port: u16,
+    pub control_path: PathBuf,
     pub known_hosts_path: PathBuf,
- }
- 
- impl ControlMaster {
-     pub fn destination(&self) -> String {
-         format!("{}@{}", self.user, self.host)
-     }
- 
-     pub async fn open(&self) -> Result<()> {
-         // ControlPersist keeps the master alive for subsequent Exec calls.
-         // -M: master mode, -N: no command, -f: background after auth
-         let status = Command::new("ssh")
-             .arg("-MNf")
-             .arg("-p")
-             .arg(self.port.to_string())
-             .arg("-o")
-             .arg("BatchMode=yes")
+}
+
+impl ControlMaster {
+    pub fn destination(&self) -> String {
+        format!("{}@{}", self.user, self.host)
+    }
+
+    pub async fn open(&self) -> Result<()> {
+        // ControlPersist keeps the master alive for subsequent Exec calls.
+        // -M: master mode, -N: no command, -f: background after auth
+        let status = Command::new("ssh")
+            .arg("-MNf")
+            .arg("-p")
+            .arg(self.port.to_string())
+            .arg("-o")
+            .arg("BatchMode=yes")
             .arg("-o")
             .arg("StrictHostKeyChecking=yes")
             .arg("-o")
             .arg(format!("UserKnownHostsFile={}", self.known_hosts_path.display()))
-             .arg("-o")
-             .arg("ControlMaster=yes")
-             .arg("-o")
-             .arg("ControlPersist=10m")
-             .arg("-o")
-             .arg(format!("ControlPath={}", self.control_path.display()))
-             .arg(self.destination())
-             .status()
-             .await
-             .context("spawn ssh ControlMaster")?;
- 
-         if !status.success() {
-             return Err(anyhow!(
-                 "ssh ControlMaster failed with status: {}",
-                 status
-             ));
-         }
-         Ok(())
-     }
- 
-     pub async fn exec(&self, command: &str, timeout_ms: Option<u64>) -> Result<ExecOutput> {
-         let mut cmd = Command::new("ssh");
-         cmd.arg("-p")
-             .arg(self.port.to_string())
-             .arg("-o")
-             .arg("BatchMode=yes")
+            .arg("-o")
+            .arg("ControlMaster=yes")
+            .arg("-o")
+            .arg("ControlPersist=10m")
+            .arg("-o")
+            .arg(format!("ControlPath={}", self.control_path.display()))
+            .arg(self.destination())
+            .status()
+            .await
+            .context("spawn ssh ControlMaster")?;
+
+        if !status.success() {
+            return Err(anyhow!("ssh ControlMaster failed with status: {}", status));
+        }
+        Ok(())
+    }
+
+    pub async fn exec(&self, command: &str, timeout_ms: Option<u64>) -> Result<ExecOutput> {
+        let mut cmd = Command::new("ssh");
+        cmd.arg("-p")
+            .arg(self.port.to_string())
+            .arg("-o")
+            .arg("BatchMode=yes")
             .arg("-o")
             .arg("StrictHostKeyChecking=yes")
             .arg("-o")
             .arg(format!("UserKnownHostsFile={}", self.known_hosts_path.display()))
-             .arg("-o")
-             .arg(format!("ControlPath={}", self.control_path.display()))
-             .arg("-S")
-             .arg(&self.control_path)
-             .arg(self.destination())
-             .arg("--")
-             .arg(command);
- 
-         let fut = cmd.output();
-         let output = match timeout_ms {
-             Some(ms) if ms > 0 => tokio::time::timeout(std::time::Duration::from_millis(ms), fut)
-                 .await
-                 .context("exec timeout")??,
-             _ => fut.await?,
-         };
- 
-         Ok(ExecOutput {
-             exit_code: output.status.code().unwrap_or(-1),
-             stdout: output.stdout,
-             stderr: output.stderr,
-         })
-     }
- 
+            .arg("-o")
+            .arg(format!("ControlPath={}", self.control_path.display()))
+            .arg("-S")
+            .arg(&self.control_path)
+            .arg(self.destination())
+            .arg("--")
+            .arg(command);
+
+        let fut = cmd.output();
+        let output = match timeout_ms {
+            Some(ms) if ms > 0 => tokio::time::timeout(std::time::Duration::from_millis(ms), fut)
+                .await
+                .context("exec timeout")??,
+            _ => fut.await?,
+        };
+
+        Ok(ExecOutput {
+            exit_code: output.status.code().unwrap_or(-1),
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
+    }
+
     pub async fn spawn_shell(&self, request_tty: bool) -> Result<Child> {
         let mut cmd = Command::new("ssh");
         if request_tty {
@@ -200,53 +197,45 @@ use tokio::process::Child;
         Ok(child)
     }
 
-     pub async fn close(&self) -> Result<()> {
-         let status = Command::new("ssh")
-             .arg("-p")
-             .arg(self.port.to_string())
-             .arg("-o")
-             .arg("BatchMode=yes")
+    pub async fn close(&self) -> Result<()> {
+        let status = Command::new("ssh")
+            .arg("-p")
+            .arg(self.port.to_string())
+            .arg("-o")
+            .arg("BatchMode=yes")
             .arg("-o")
             .arg("StrictHostKeyChecking=yes")
             .arg("-o")
             .arg(format!("UserKnownHostsFile={}", self.known_hosts_path.display()))
-             .arg("-o")
-             .arg(format!("ControlPath={}", self.control_path.display()))
-             .arg("-S")
-             .arg(&self.control_path)
-             .arg("-O")
-             .arg("exit")
-             .arg(self.destination())
-             .status()
-             .await
-             .context("close ControlMaster")?;
- 
-         if !status.success() {
-             return Err(anyhow!("ssh -O exit failed: {}", status));
-         }
-         Ok(())
-     }
- }
- 
- #[derive(Debug, Clone)]
- pub struct ExecOutput {
-     pub exit_code: i32,
-     pub stdout: Vec<u8>,
-     pub stderr: Vec<u8>,
- }
- 
- pub fn ensure_host_allowed(host: &str, allowed: &[String]) -> Result<()> {
-     if allowed.is_empty() {
-         return Err(anyhow!(
-             "credential has no allowed_hosts; refusing to connect"
-         ));
-     }
-     if allowed.iter().any(|h| h == host) {
-         Ok(())
-     } else {
-         Err(anyhow!("host not allowed by credential policy"))
-     }
- }
+            .arg("-o")
+            .arg(format!("ControlPath={}", self.control_path.display()))
+            .arg("-S")
+            .arg(&self.control_path)
+            .arg("-O")
+            .arg("exit")
+            .arg(self.destination())
+            .status()
+            .await
+            .context("close ControlMaster")?;
+
+        if !status.success() {
+            return Err(anyhow!("ssh -O exit failed: {}", status));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecOutput {
+    pub exit_code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+pub fn ensure_host_allowed(host: &str, allowed: &[String]) -> Result<()> {
+    // Backwards-compatible wrapper. Prefer using crate::policy::ensure_host_allowed.
+    crate::policy::ensure_host_allowed(host, allowed)
+}
 
 pub fn ensure_username_allowed(
     username: &str,
@@ -265,9 +254,9 @@ pub fn ensure_username_allowed(
         Err(anyhow!("username not allowed by credential policy"))
     }
 }
- 
- pub fn control_path(runtime_dir: &Path, session_id: &str) -> PathBuf {
-     // OpenSSH has a relatively short unix socket path limit.
-     // Keep it short: <runtime>/<session>.sock
-     runtime_dir.join(format!("{session_id}.sock"))
- }
+
+pub fn control_path(runtime_dir: &Path, session_id: &str) -> PathBuf {
+    // OpenSSH has a relatively short unix socket path limit.
+    // Keep it short: <runtime>/<session>.sock
+    runtime_dir.join(format!("{session_id}.sock"))
+}
