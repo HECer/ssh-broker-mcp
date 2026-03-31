@@ -1,0 +1,19 @@
+ [package]
+ name = "ssh-broker-enroll"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
+ publish = false
+ 
+ [dependencies]
+ anyhow.workspace = true
+ clap.workspace = true
+ tokio.workspace = true
+ tracing.workspace = true
+ tracing-subscriber.workspace = true
+ serde.workspace = true
+ serde_json.workspace = true
+ 
+ rpassword = "7"
+ 
+ ssh-broker-common = { path = "../common" }
