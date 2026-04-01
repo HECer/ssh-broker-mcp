@@ -1,19 +1,23 @@
- # Rust / Cargo
- /target
- **/target
- Cargo.lock
- 
- # OS / editor
- .DS_Store
- Thumbs.db
- *.swp
- *.swo
- .idea/
- .vscode/
- 
- # Broker runtime / local state
- /run
- ssh-broker.db
- *.db
- *.db-shm
- *.db-wal
+# Rust / Cargo
+/target
+**/target
+Cargo.lock
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Broker runtime / local state
+/run
+ssh-broker.db
+*.db
+*.db-shm
+*.db-wal
+
+# UI
+ui-web/node_modules
+ui-web/dist

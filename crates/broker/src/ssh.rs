@@ -47,6 +47,115 @@ impl ControlMaster {
         Ok(())
     }
 
+    /// Opens a ControlMaster connection using password (and optionally OTP) via a controlled
+    /// SSH_ASKPASS flow. Secrets are never returned over RPC; they must be present locally.
+    ///
+    /// Notes:
+    /// - This is currently implemented for Unix platforms (POSIX shell-based askpass helper).
+    /// - On non-Unix platforms this returns an error.
+    pub async fn open_password_totp(&self, password: &str, totp_code: Option<&str>) -> Result<()> {
+        #[cfg(not(unix))]
+        {
+            let _ = (password, totp_code);
+            return Err(anyhow!("password+otp auth is not supported on this platform yet"));
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let runtime_dir = self
+                .control_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf();
+            let sid = self
+                .control_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("session");
+
+            let dir = runtime_dir.join("askpass");
+            tokio::fs::create_dir_all(&dir).await?;
+
+            let secret_path = dir.join(format!("{sid}.secret"));
+            let script_path = dir.join(format!("{sid}.sh"));
+
+            // Two-line secret file:
+            // 1) password
+            // 2) totp (optional)
+            let mut secret = String::new();
+            secret.push_str(password);
+            secret.push('\n');
+            if let Some(code) = totp_code {
+                secret.push_str(code);
+            }
+            secret.push('\n');
+            tokio::fs::write(&secret_path, secret).await?;
+            tokio::fs::set_permissions(&secret_path, std::fs::Permissions::from_mode(0o600)).await?;
+
+            // Askpass script prints either password or OTP based on prompt text.
+            // ssh invokes $SSH_ASKPASS with the prompt as argv[1].
+            let script = r#"#!/bin/sh
+prompt=\"$1\"
+f=\"$SSH_BROKER_ASKPASS_FILE\"
+case \"$prompt\" in
+  *[Vv]erification*|*[Oo][Tt][Pp]*|*[Tt]oken*|*[Pp]asscode*)
+    sed -n '2p' \"$f\"
+    ;;
+  *)
+    sed -n '1p' \"$f\"
+    ;;
+esac
+"#;
+            tokio::fs::write(&script_path, script).await?;
+            tokio::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o700)).await?;
+
+            // ControlPersist keeps the master alive for subsequent Exec calls.
+            // -M: master mode, -N: no command, -f: background after auth
+            let status = Command::new("ssh")
+                .arg("-MNf")
+                .arg("-p")
+                .arg(self.port.to_string())
+                .arg("-o")
+                .arg("BatchMode=no")
+                .arg("-o")
+                .arg("NumberOfPasswordPrompts=1")
+                .arg("-o")
+                .arg("PreferredAuthentications=password,keyboard-interactive")
+                .arg("-o")
+                .arg("KbdInteractiveAuthentication=yes")
+                .arg("-o")
+                .arg("StrictHostKeyChecking=yes")
+                .arg("-o")
+                .arg(format!("UserKnownHostsFile={}", self.known_hosts_path.display()))
+                .arg("-o")
+                .arg("ControlMaster=yes")
+                .arg("-o")
+                .arg("ControlPersist=10m")
+                .arg("-o")
+                .arg(format!("ControlPath={}", self.control_path.display()))
+                .env("SSH_ASKPASS", &script_path)
+                .env("SSH_ASKPASS_REQUIRE", "force")
+                .env("SSH_BROKER_ASKPASS_FILE", &secret_path)
+                // ssh requires DISPLAY to be set to use askpass.
+                .env("DISPLAY", "ssh-broker")
+                .arg(self.destination())
+                .status()
+                .await
+                .context("spawn ssh ControlMaster (password_totp)")?;
+
+            // Best-effort cleanup.
+            let _ = tokio::fs::remove_file(&secret_path).await;
+            let _ = tokio::fs::remove_file(&script_path).await;
+
+            if !status.success() {
+                return Err(anyhow!("ssh ControlMaster failed with status: {}", status));
+            }
+            Ok(())
+        }
+    }
+
     pub async fn exec(&self, command: &str, timeout_ms: Option<u64>) -> Result<ExecOutput> {
         let mut cmd = Command::new("ssh");
         cmd.arg("-p")

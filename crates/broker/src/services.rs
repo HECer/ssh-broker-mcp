@@ -5,7 +5,7 @@ use crate::{
     sessions::SessionManager,
     ssh::{control_path, ensure_host_allowed, ensure_username_allowed, ControlMaster},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ssh_broker_common::{ids, store::CredentialStore};
 use ssh_broker_proto::sshbroker::v1::{
     credential_service_server::CredentialService, session_service_server::SessionService, CloseSessionRequest, CloseSessionResponse, DeleteCredentialRequest, DeleteCredentialResponse, ExecRequest, ExecResponse,
@@ -17,6 +17,14 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
+use totp_rs::{Algorithm, Secret, TOTP};
+
+#[derive(Debug, Deserialize)]
+struct PasswordTotpSecret {
+    password: String,
+    #[serde(default)]
+    totp_seed: String,
+}
 
 #[derive(Clone)]
 pub struct CredentialSvc {
@@ -130,13 +138,6 @@ impl SessionSvc {
 
          ensure_host_allowed(&host, &meta.allowed_hosts).map_err(to_status)?;
 
-         // For now, rely on OpenSSH key/agent/cert auth (BatchMode=yes).
-         // Password/OTP can be supported by enabling a tightly-controlled SSH_ASKPASS flow,
-         // but that is intentionally omitted from this minimal skeleton.
-         if meta.auth_type == "password_totp" {
-             warn!("credential auth_type=password_totp is not supported in this skeleton (BatchMode=yes)");
-         }
-
         let user = if !req.username_override.is_empty() {
             req.username_override
         } else {
@@ -159,7 +160,26 @@ impl SessionSvc {
             known_hosts_path: self.known_hosts_path.clone(),
          };
 
-         cm.open().await.map_err(to_status)?;
+        if meta.auth_type == "password_totp" {
+            warn!("using password_totp auth (via SSH_ASKPASS); prefer keys/agent/certs when possible");
+            let secret_raw = self
+                .store
+                .get_secret(&credential_id)
+                .map_err(to_status)?
+                .ok_or_else(|| Status::failed_precondition("missing secret material in keyring"))?;
+            let secret: PasswordTotpSecret = serde_json::from_str(&secret_raw)
+                .map_err(|e| Status::failed_precondition(format!("invalid stored secret JSON: {e}")))?;
+            let totp_code = if secret.totp_seed.trim().is_empty() {
+                None
+            } else {
+                Some(generate_totp(&secret.totp_seed).map_err(to_status)?)
+            };
+            cm.open_password_totp(&secret.password, totp_code.as_deref())
+                .await
+                .map_err(to_status)?;
+        } else {
+            cm.open().await.map_err(to_status)?;
+        }
 
          self.sessions.insert(session_id.clone(), cm).await;
          info!(%session_id, "opened session");
@@ -391,7 +411,7 @@ impl SessionSvc {
                         // Best-effort: resizing remote PTY via OpenSSH is non-trivial without a local PTY.
                         // We currently ignore resize messages.
                     }
-          Some(ssh_broker_proto::sshbroker::v1::shell_client_msg::Msg::Close(_)) => {
+                    Some(ssh_broker_proto::sshbroker::v1::shell_client_msg::Msg::Close(_)) => {
                         break;
                     }
                     Some(ssh_broker_proto::sshbroker::v1::shell_client_msg::Msg::Open(_)) | None => {}
@@ -645,6 +665,12 @@ impl SessionSvc {
  fn to_status<E: std::fmt::Display>(e: E) -> Status {
      Status::internal(e.to_string())
  }
+
+fn generate_totp(seed_base32: &str) -> anyhow::Result<String> {
+    let secret_bytes = Secret::Encoded(seed_base32.trim().to_string()).to_bytes()?;
+    let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret_bytes)?;
+    Ok(totp.generate_current()?)
+}
 
 fn shell_quote(s: &str) -> String {
     // Minimal, conservative quoting for remote POSIX shell.

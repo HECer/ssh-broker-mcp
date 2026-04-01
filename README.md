@@ -16,7 +16,7 @@ This repo is a **clean skeleton** for the architecture you described:
 ## Threat model / guarantees
 
 - **Guaranteed by construction**: no gRPC method returns secret material (there is no “get password/key” method in the proto).
-- **Not possible** with password/OTP: “nobody knows the password” headlessly. A trusted component (the broker machine) must have the secret.
+- **Password/OTP requires a trusted component**: if you want headless auth, the broker host must hold/derive the secret (e.g., stored in OS keyring), or you need an interactive user prompt.
 - Stronger option: use **ssh-agent / FIDO2 / TPM / SSH certificates** so secrets are non-exportable or short-lived.
 
 ## Local vs Remote
@@ -72,15 +72,52 @@ Add a host key to the broker-known hosts:
 cargo run -p ssh-broker-enroll -- hostkey-add --host my.vps.example.com --port 22
 ```
 
+## UI (separate service)
+
+This repo includes a **separate UI service** (clean separation from the broker):
+- `ssh-broker-ui` (Rust/axum): serves HTTP and talks to `ssh-broker` over gRPC (UDS locally or TCP+mTLS remotely).
+- `ui-web` (React/Vite): frontend that calls the UI service `/api/*`.
+
+### Run UI locally (no auth)
+1) Start broker:
+```bash
+cargo run -p ssh-broker -- --listen-uds ./run/ssh-broker.sock
+```
+
+2) Build UI:
+```bash
+cd ui-web
+npm install
+npm run build
+```
+
+3) Start UI service:
+```bash
+cargo run -p ssh-broker-ui -- \
+  --broker-uds ./run/ssh-broker.sock \
+  --http-addr 127.0.0.1:8080 \
+  --static-dir ui-web/dist \
+  --auth-mode none
+```
+
+### OIDC/SSO (UI service)
+Set:
+- `SSH_BROKER_UI_AUTH_MODE=oidc`
+- `SSH_BROKER_UI_COOKIE_KEY_B64` (generate: `openssl rand -base64 64`)
+- `SSH_BROKER_UI_OIDC_ISSUER`
+- `SSH_BROKER_UI_OIDC_CLIENT_ID`
+- `SSH_BROKER_UI_OIDC_CLIENT_SECRET`
+- `SSH_BROKER_UI_OIDC_REDIRECT_URL` (must end with `/auth/callback`)
+
 ## How sessions work (OpenSSH ControlMaster)
 
 - `OpenSession` starts an OpenSSH **ControlMaster** connection (multiplexing socket).
 - `Exec` runs commands via that control socket (fast, avoids re-auth each time).
 - `CloseSession` sends `ssh -O exit` and removes the socket.
 
-The broker runs OpenSSH with `BatchMode=yes` in this skeleton:
+The broker runs OpenSSH with `BatchMode=yes` for key/cert/agent auth:
 - Works well with keys / agent / certs.
-- **Password/OTP is intentionally not implemented here**, because doing it safely requires a tightly controlled `SSH_ASKPASS` flow or equivalent. You can add it later as an explicit opt-in.
+- For `auth_type=password_totp`, the broker uses a controlled `SSH_ASKPASS` flow (**Unix-only for now**). Secrets are stored locally by `ssh-broker-enroll` in the OS keyring and are never returned over gRPC.
 
 ## Production hardening (implemented)
 
@@ -102,4 +139,4 @@ Audit events are written as JSONL to `<runtime_dir>/audit.jsonl` by default:
 - `SSH_BROKER_AUDIT_LOG_COMMANDS` (off by default; enabling may capture secrets if you run commands containing secrets)
 
 ### Notes on password / OTP
-This project is production-oriented toward **SSH keys / ssh-agent / SSH certificates**. Password/OTP auth is intentionally not enabled by default when running headless.
+This project is production-oriented toward **SSH keys / ssh-agent / SSH certificates**. Password/OTP is supported via `auth_type=password_totp`, but remains an explicit opt-in.
