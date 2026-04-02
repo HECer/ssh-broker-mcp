@@ -151,6 +151,8 @@ impl SessionSvc {
 
          let session_id = ids::new_session_id();
          let cp = control_path(self.sessions.runtime_dir(), &session_id);
+         let host_for_audit = host.clone();
+         let user_for_audit = user.clone();
 
          let cm = ControlMaster {
              user,
@@ -188,9 +190,9 @@ impl SessionSvc {
                 peer,
                 &session_id,
                 &credential_id,
-                &host,
+                &host_for_audit,
                 port,
-                &user,
+                &user_for_audit,
             ))
             .await
             .map_err(to_status)?;
@@ -239,7 +241,12 @@ impl SessionSvc {
         &self,
         request: Request<tonic::Streaming<ShellClientMsg>>,
     ) -> Result<Response<Self::ShellStream>, Status> {
-        enforce_rate_limit(&self.rate_limiter, &request).await?;
+        // Rate limit check inline to avoid Send/Sync issues with Streaming
+        let rate_key = request.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| "local".to_string());
+        let ok = self.rate_limiter.check(&rate_key).await.map_err(to_status)?;
+        if !ok {
+            return Err(Status::resource_exhausted("rate limit exceeded"));
+        }
         let peer = peer(&request);
         let mut inbound = request.into_inner();
         let sessions = self.sessions.clone();
@@ -453,7 +460,12 @@ impl SessionSvc {
         &self,
         request: Request<tonic::Streaming<ScpUploadRequest>>,
     ) -> Result<Response<ScpUploadResponse>, Status> {
-        enforce_rate_limit(&self.rate_limiter, &request).await?;
+        // Rate limit check inline to avoid Send/Sync issues with Streaming
+        let rate_key = request.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| "local".to_string());
+        let ok = self.rate_limiter.check(&rate_key).await.map_err(to_status)?;
+        if !ok {
+            return Err(Status::resource_exhausted("rate limit exceeded"));
+        }
         let peer = peer(&request);
         let mut inbound = request.into_inner();
         let first = inbound

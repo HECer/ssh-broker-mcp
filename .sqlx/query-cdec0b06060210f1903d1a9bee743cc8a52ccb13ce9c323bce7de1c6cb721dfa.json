@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT credential_id, label, username, auth_type, allowed_hosts, allowed_usernames\n             FROM credentials\n             ORDER BY label ASC;\n             ",
+  "describe": {
+    "columns": [
+      {
+        "name": "credential_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "label",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "username",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "auth_type",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "allowed_hosts",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "allowed_usernames",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "cdec0b06060210f1903d1a9bee743cc8a52ccb13ce9c323bce7de1c6cb721dfa"
+}

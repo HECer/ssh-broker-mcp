@@ -7,7 +7,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use axum_extra::extract::cookie::{Cookie, CookieJar, Key};
+use axum_extra::extract::cookie::{Cookie, CookieJar, Key, PrivateCookieJar};
 use base64::{engine::general_purpose, Engine as _};
 use clap::Parser;
 use openidconnect::{

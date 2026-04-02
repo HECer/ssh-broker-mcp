@@ -90,7 +90,7 @@
             let allowed_usernames: Vec<String> =
                 serde_json::from_str(&r.allowed_usernames).unwrap_or_default();
              out.push(CredentialMeta {
-                 credential_id: r.credential_id,
+                 credential_id: r.credential_id.expect("credential_id must exist"),
                  label: r.label,
                  username: r.username,
                  auth_type: r.auth_type,
@@ -114,7 +114,7 @@
          .await?;
  
          Ok(row.map(|r| CredentialMeta {
-             credential_id: r.credential_id,
+             credential_id: r.credential_id.expect("credential_id must exist"),
              label: r.label,
              username: r.username,
              auth_type: r.auth_type,
@@ -129,6 +129,10 @@
              .await?;
  
          // Best-effort: secret may or may not exist.
+         // On Windows, keyring uses delete_credential; on Unix, delete_password.
+         #[cfg(target_os = "windows")]
+         let _ = self.keyring_entry(credential_id).delete_credential();
+         #[cfg(not(target_os = "windows"))]
          let _ = self.keyring_entry(credential_id).delete_password();
          Ok(())
      }
